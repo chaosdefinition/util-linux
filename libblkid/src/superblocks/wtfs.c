@@ -10,7 +10,6 @@
 #include <unistd.h>
 #include <string.h>
 #include <stdint.h>
-#include <uuid.h>
 
 #include "superblocks.h"
 
@@ -22,6 +21,11 @@
 
 /* magic number in string */
 #define WTFS_MAGIC_STR "\x3e\x0c"
+
+/* version info */
+#define WTFS_VERSION_MAJOR(v) ((v) >> 8)
+#define WTFS_VERSION_MINOR(v) ((v) & 0xff)
+#define WTFS_VERSION_PATCH(v) ((v) ^ (v))
 
 struct wtfs_super_block
 {
@@ -44,9 +48,35 @@ struct wtfs_super_block
 	unsigned char uuid[16];
 } __attribute__((packed));
 
+static const char * wtfs_get_version_string(uint64_t version)
+{
+	/* patch is always 0 */
+	if (WTFS_VERSION_PATCH(version) != 0) {
+		return NULL;
+	}
+
+	switch (WTFS_VERSION_MAJOR(version)) {
+	case 0:
+		switch (WTFS_VERSION_MINOR(version)) {
+		case 1:
+			return "0.1.0";
+		case 2:
+			return "0.2.0";
+		case 3:
+			return "0.3.0";
+		default:
+			return NULL;
+		}
+
+	default:
+		return NULL;
+	}
+};
+
 static int probe_wtfs(blkid_probe pr, const struct blkid_idmag * mag)
 {
-	struct wtfs_super_block * sb;
+	struct wtfs_super_block * sb = NULL;
+	const char * version_str = NULL;
 	size_t length;
 
 	sb = blkid_probe_get_sb(pr, mag, struct wtfs_super_block);
@@ -54,14 +84,21 @@ static int probe_wtfs(blkid_probe pr, const struct blkid_idmag * mag)
 		return errno ? -errno : 1;
 	}
 
-	/* probe label */
-	length = strnlen(sb->label, 32);
-	if (length != 0) {
-		blkid_probe_set_label(pr, sb->label, length);
+	/* check and set version */
+	if ((version_str = wtfs_get_version_string(sb->version)) == NULL) {
+		return 1;
 	}
+	blkid_probe_set_version(pr, version_str);
 
-	/* probe uuid */
-	if (!uuid_is_null(sb->uuid)) {
+	/* label and UUID are supported since v0.3.0 */
+	if (WTFS_VERSION_MINOR(sb->version) >= 3) {
+		/* probe label */
+		length = strnlen(sb->label, 32);
+		if (length != 0) {
+			blkid_probe_set_label(pr, sb->label, length);
+		}
+
+		/* probe uuid */
 		blkid_probe_set_uuid(pr, sb->uuid);
 	}
 
