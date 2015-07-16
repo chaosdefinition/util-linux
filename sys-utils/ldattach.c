@@ -62,12 +62,13 @@ struct gsm_config
 #ifndef N_GIGASET_M101
 # define N_GIGASET_M101 16
 #endif
-#ifndef N_GSM0710
-# define N_GSM0710 21
-#endif
 
 #ifndef N_PPS
 # define N_PPS 18
+#endif
+
+#ifndef N_GSM0710
+# define N_GSM0710 21
 #endif
 
 #define MAXINTROPARMLEN 32
@@ -86,7 +87,6 @@ struct ld_table {
 
 /* currently supported line disciplines, plus some aliases */
 static const struct ld_table ld_discs[] = {
-	{ "GSM0710",		N_GSM0710},
 	{ "TTY",		N_TTY },
 	{ "SLIP",		N_SLIP },
 	{ "MOUSE",		N_MOUSE },
@@ -101,10 +101,11 @@ static const struct ld_table ld_discs[] = {
 	{ "SYNC_PPP",		N_SYNC_PPP },
 	{ "SYNCPPP",		N_SYNC_PPP },
 	{ "HCI",		N_HCI },
-	{ "PPS",		N_PPS },
+	{ "GIGASET_M101",	N_GIGASET_M101 },
 	{ "M101",		N_GIGASET_M101 },
 	{ "GIGASET",		N_GIGASET_M101 },
-	{ "GIGASET_M101",	N_GIGASET_M101 },
+	{ "PPS",		N_PPS },
+	{ "GSM0710",		N_GSM0710},
 	{ NULL,	0 }
 };
 
@@ -161,8 +162,8 @@ static void print_table(FILE * out, const struct ld_table *tab)
 	int i;
 
 	for (t = tab, i = 1; t && t->name; t++, i++) {
-		fprintf(out, "  %-10s", t->name);
-		if (!(i % 6))
+		fprintf(out, "  %-12s", t->name);
+		if (!(i % 5))
 			fputc('\n', out);
 	}
 }
@@ -214,11 +215,14 @@ static void __attribute__ ((__noreturn__)) usage(int exitcode)
 	fputs(USAGE_SEPARATOR, out);
 	fputs(USAGE_HELP, out);
 	fputs(USAGE_VERSION, out);
+
 	fputs(_("\nKnown <ldisc> names:\n"), out);
 	print_table(out, ld_discs);
+	fputs(USAGE_SEPARATOR, out);
+
 	fputs(_("\nKnown <iflag> names:\n"), out);
 	print_table(out, ld_iflags);
-	fputc('\n', out);
+
 	fprintf(out, USAGE_MAN_TAIL("ldattach(8)"));
 	exit(exitcode);
 }
@@ -365,6 +369,19 @@ int main(int argc, char **argv)
 	if (ldisc < 0)
 		ldisc = strtos32_or_err(argv[optind], _("invalid line discipline argument"));
 
+	/* ldisc specific option settings */
+	if (ldisc == N_GIGASET_M101) {
+		/* device specific defaults for line speed and data format */
+		if (speed == 0)
+			speed = 115200;
+		if (bits == '-')
+			bits = '8';
+		if (parity == '-')
+			parity = 'n';
+		if (stop == '-')
+			stop = '1';
+	}
+
 	/* open device */
 	dev = argv[optind + 1];
 	if ((tty_fd = open(dev, O_RDWR | O_NOCTTY)) < 0)
@@ -447,12 +464,13 @@ int main(int argc, char **argv)
 		}
 	}
 
-	/* Attach the line discpline. */
+	/* Attach the line discipline. */
 	if (ioctl(tty_fd, TIOCSETD, &ldisc) < 0)
 		err(EXIT_FAILURE, _("cannot set line discipline"));
 
 	dbg("line discipline set to %d", ldisc);
 
+	/* ldisc specific post-attach actions */
 	if (ldisc == N_GSM0710)
 		gsm0710_set_conf(tty_fd);
 
