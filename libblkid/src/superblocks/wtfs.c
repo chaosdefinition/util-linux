@@ -50,11 +50,6 @@ struct wtfs_super_block
 
 static const char * wtfs_get_version_string(uint64_t version)
 {
-	/* patch is always 0 */
-	if (WTFS_VERSION_PATCH(version) != 0) {
-		return NULL;
-	}
-
 	switch (WTFS_VERSION_MAJOR(version)) {
 	case 0:
 		switch (WTFS_VERSION_MINOR(version)) {
@@ -64,6 +59,10 @@ static const char * wtfs_get_version_string(uint64_t version)
 			return "0.2.0";
 		case 3:
 			return "0.3.0";
+		case 4:
+			return "0.4.0";
+		case 5:
+			return "0.5.0";
 		default:
 			return NULL;
 		}
@@ -91,7 +90,8 @@ static int probe_wtfs(blkid_probe pr, const struct blkid_idmag * mag)
 	blkid_probe_set_version(pr, version_str);
 
 	/* label and UUID are supported since v0.3.0 */
-	if (WTFS_VERSION_MINOR(sb->version) >= 3) {
+	if (WTFS_VERSION_MINOR(sb->version) >= 3 ||
+		WTFS_VERSION_MAJOR(sb->version) > 0) {
 		/* probe label */
 		length = strnlen(sb->label, 32);
 		if (length != 0) {
