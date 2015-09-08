@@ -30,6 +30,8 @@
 #include <getopt.h>
 #include <sys/stat.h>
 #include <assert.h>
+#include <fcntl.h>
+#include <libsmartcols.h>
 #ifdef HAVE_LIBREADLINE
 # include <readline/readline.h>
 #endif
@@ -45,6 +47,7 @@
 #include "all-io.h"
 #include "rpmatch.h"
 #include "loopdev.h"
+#include "xalloc.h"
 
 #include "libfdisk.h"
 #include "fdisk-list.h"
@@ -70,7 +73,9 @@ enum {
 	ACT_CHANGE_ID,
 	ACT_DUMP,
 	ACT_LIST,
+	ACT_LIST_FREE,
 	ACT_LIST_TYPES,
+	ACT_REORDER,
 	ACT_SHOW_SIZE,
 	ACT_SHOW_GEOM,
 	ACT_VERIFY,
@@ -86,9 +91,11 @@ struct sfdisk {
 	const char	*label;		/* --label <label> */
 	const char	*label_nested;	/* --label-nested <label> */
 	const char	*backup_file;	/* -O <path> */
+	const char	*move_typescript; /* --movedata <typescript> */
 	char		*prompt;
 
-	struct fdisk_context	*cxt;	/* libfdisk context */
+	struct fdisk_context	*cxt;		/* libfdisk context */
+	struct fdisk_partition  *orig_pa;	/* -N <partno> before the change */
 
 	unsigned int verify : 1,	/* call fdisk_verify_disklabel() */
 		     quiet  : 1,	/* suppres extra messages */
@@ -99,6 +106,7 @@ struct sfdisk {
 		     container : 1,	/* PT contains container (MBR extended) partitions */
 		     append : 1,	/* don't create new PT, append partitions only */
 		     json : 1,		/* JSON dump */
+		     movedata: 1,	/* move data after resize */
 		     noact  : 1;	/* do not write to device */
 };
 
@@ -144,14 +152,13 @@ static int get_user_reply(const char *prompt, char *buf, size_t bufsz)
 	return 0;
 }
 
-static int ask_callback(struct fdisk_context *cxt,
+static int ask_callback(struct fdisk_context *cxt __attribute__((__unused__)),
 			struct fdisk_ask *ask,
 			void *data)
 {
 	struct sfdisk *sf = (struct sfdisk *) data;
 	int rc = 0;
 
-	assert(cxt);
 	assert(ask);
 
 	switch(fdisk_ask_get_type(ask)) {
@@ -202,6 +209,7 @@ static int ask_callback(struct fdisk_context *cxt,
 static void sfdisk_init(struct sfdisk *sf)
 {
 	fdisk_init_debug(0);
+	scols_init_debug(0);
 	sfdiskprog_init_debug();
 
 	sf->cxt = fdisk_new_context();
@@ -238,6 +246,21 @@ static int sfdisk_deinit(struct sfdisk *sf)
 
 	memset(sf, 0, sizeof(*sf));
 	return 0;
+}
+
+static struct fdisk_partition *get_partition(struct fdisk_context *cxt, size_t partno)
+{
+	struct fdisk_table *tb = NULL;
+	struct fdisk_partition *pa;
+
+	if (fdisk_get_partitions(cxt, &tb) != 0)
+		return NULL;
+
+	pa = fdisk_table_get_partition_by_partno(tb, partno);
+	if (pa)
+		fdisk_ref_partition(pa);
+	fdisk_unref_table(tb);
+	return pa;
 }
 
 static void backup_sectors(struct sfdisk *sf,
@@ -284,6 +307,26 @@ fail:
 	errx(EXIT_FAILURE, _("%s: failed to create a backup"), devname);
 }
 
+static char *mk_backup_filename_tpl(const char *filename, const char *devname, const char *suffix)
+{
+	char *tpl = NULL;
+	char *name, *buf = xstrdup(devname);
+
+	name = basename(buf);
+
+	if (!filename) {
+		const char *home = getenv ("HOME");
+		if (!home)
+			errx(EXIT_FAILURE, _("failed to create a backup file, $HOME undefined"));
+		xasprintf(&tpl, "%s/sfdisk-%s%s", home, name, suffix);
+	} else
+		xasprintf(&tpl, "%s-%s%s", filename, name, suffix);
+
+	free(buf);
+	return tpl;
+}
+
+
 static void backup_partition_table(struct sfdisk *sf, const char *devname)
 {
 	const char *name;
@@ -297,14 +340,7 @@ static void backup_partition_table(struct sfdisk *sf, const char *devname)
 	if (!fdisk_has_label(sf->cxt))
 		return;
 
-	if (!sf->backup_file) {
-		/* initialize default backup filename */
-		const char *home = getenv ("HOME");
-		if (!home)
-			errx(EXIT_FAILURE, _("failed to create a signature backup, $HOME undefined"));
-		xasprintf(&tpl, "%s/sfdisk-%s-", home, basename(devname));
-	} else
-		xasprintf(&tpl, "%s-%s-", sf->backup_file, basename(devname));
+	tpl = mk_backup_filename_tpl(sf->backup_file, devname, "-");
 
 	color_scheme_enable("header", UL_COLOR_BOLD);
 	fdisk_info(sf->cxt, _("Backup files:"));
@@ -318,6 +354,145 @@ static void backup_partition_table(struct sfdisk *sf, const char *devname)
 	free(tpl);
 }
 
+static int move_partition_data(struct sfdisk *sf, size_t partno, struct fdisk_partition *orig_pa)
+{
+	struct fdisk_partition *pa = get_partition(sf->cxt, partno);
+	char *devname, *typescript;
+	FILE *f;
+	int ok = 0, fd, backward;
+	fdisk_sector_t nsectors, from, to, step, i;
+	size_t ss, step_bytes, cc;
+	uintmax_t src, dst;
+	char *buf;
+
+	assert(sf->movedata);
+
+	if (!pa)
+		warnx(_("failed to read new partition from device (ignore --move-data)"));
+	else if (!fdisk_partition_has_size(pa))
+		warnx(_("failed to get size of the new partition (ignore --move-data)"));
+	else if (!fdisk_partition_has_start(pa))
+		warnx(_("failed to get start of the new partition (ignore --move-data)"));
+	else if (!fdisk_partition_has_size(orig_pa))
+		warnx(_("failed to get size of the old partition (ignore --move-data)"));
+	else if (!fdisk_partition_has_start(orig_pa))
+		warnx(_("failed to get start of the old partition (ignore --move-data)"));
+	else if (fdisk_partition_get_start(pa) == fdisk_partition_get_start(orig_pa))
+		warnx(_("begin of the partition has not been moved (ignore --move-data)"));
+	else if (fdisk_partition_get_size(orig_pa) < fdisk_partition_get_size(pa))
+		warnx(_("new partition is smaller than original (ignore --move-data)"));
+	else
+		ok = 1;
+	if (!ok)
+		return -EINVAL;
+
+	fd = fdisk_get_devfd(sf->cxt);
+
+	ss = fdisk_get_sector_size(sf->cxt);
+	nsectors = fdisk_partition_get_size(orig_pa);
+	from = fdisk_partition_get_start(orig_pa);
+	to = fdisk_partition_get_start(pa);
+	backward = from < to;
+
+	/* step cannot be bigger than gap between new and old location */
+	step = from > to ? from - to : to - from;
+	/* step cannot be bigger than original partition size */
+	if (step > fdisk_partition_get_size(orig_pa))
+		step = fdisk_partition_get_size(orig_pa);
+	/* step cannot be begger than ~1MiB */
+	if (step > (getpagesize() * 256) / ss)
+		step = (getpagesize() * 256) / ss;
+	step_bytes = step * ss;
+
+#if defined(POSIX_FADV_SEQUENTIAL) && defined(HAVE_POSIX_FADVISE)
+	posix_fadvise(fd, from * ss, nsectors * ss, POSIX_FADV_SEQUENTIAL);
+#endif
+	devname = fdisk_partname(fdisk_get_devname(sf->cxt), partno+1);
+	typescript = mk_backup_filename_tpl(sf->move_typescript, devname, ".move");
+
+	if (!sf->quiet) {
+		fdisk_info(sf->cxt,"");
+		color_scheme_enable("header", UL_COLOR_BOLD);
+		fdisk_info(sf->cxt, _("Data move:"));
+		color_disable();
+		fdisk_info(sf->cxt, _(" typescript file: %s"), typescript);
+		printf(_(" old start: %ju, new start: %ju (move %ju sectors)\n"),
+			(uintmax_t) from, (uintmax_t) to, nsectors);
+		fflush(stdout);
+	}
+
+	if (sf->interactive) {
+		int yes = 0;
+		fdisk_ask_yesno(sf->cxt, _("Do you want to move partition data?"), &yes);
+		if (!yes) {
+			fdisk_info(sf->cxt, _("Leaving."));
+			return 0;
+		}
+	}
+
+	f = fopen(typescript, "w");
+	if (!f)
+		goto fail;
+
+	/* don't translate */
+	fprintf(f, "# sfdisk: " PACKAGE_STRING "\n");
+	fprintf(f, "# Disk: %s\n", devname);
+	fprintf(f, "# Partition: %zu\n", partno + 1);
+	fprintf(f, "# Operation: move data\n");
+	fprintf(f, "# Original start offset (in sectors): %ju\n", fdisk_partition_get_start(orig_pa));
+	fprintf(f, "# New start offset (in sectors): %ju\n", fdisk_partition_get_start(pa));
+	fprintf(f, "# Area size (in sectors): %ju\n", nsectors);
+	fprintf(f, "# Step size (in bytes): %zu\n", step_bytes);
+	fprintf(f, "# Steps: %zu\n", nsectors / step);
+	fprintf(f, "#\n");
+	fprintf(f, "# <step>: <from> <to> (step offsets in bytes)\n");
+
+	src = (backward ? from + nsectors : from) * ss;
+	dst = (backward ? to + nsectors : to) * ss;
+	buf = xmalloc(step_bytes);
+
+	/*
+	fprintf(stderr, ">>>%s: src=%ju, dst=%ju, step=%ju (%ju bytes)\n",
+			backward ? "backward" : "forward", src, dst, step, step_bytes);
+	*/
+
+	for (cc = 1, i = 0; i < nsectors; i += step, cc++) {
+		ssize_t rc;
+
+		if (backward)
+			src -= step_bytes, dst -= step_bytes;
+
+
+		lseek(fd, src, SEEK_SET);
+		rc = read(fd, buf, step_bytes);
+		if (rc < 0 || rc != (ssize_t) step_bytes)
+			goto fail;
+
+		lseek(fd, dst, SEEK_SET);
+		rc = write(fd, buf, step_bytes);
+		if (rc < 0 || rc != (ssize_t) step_bytes)
+			goto fail;
+		fsync(fd);
+
+		fprintf(f, "%05zu: %12ju %12ju\n", cc, src, dst);
+
+#if defined(POSIX_FADV_DONTNEED) && defined(HAVE_POSIX_FADVISE)
+		posix_fadvise(fd, src, step_bytes, POSIX_FADV_DONTNEED);
+#endif
+		if (!backward)
+			src += step_bytes, dst += step_bytes;
+	}
+
+	fclose(f);
+	free(buf);
+	free(devname);
+	free(typescript);
+	return 0;
+fail:
+	fclose(f);
+	err(EXIT_FAILURE, _("%s: failed to move data"), devname);
+}
+
 static int write_changes(struct sfdisk *sf)
 {
 	int rc = 0;
@@ -326,6 +501,8 @@ static int write_changes(struct sfdisk *sf)
 		fdisk_info(sf->cxt, _("The partition table is unchanged (--no-act)."));
 	else {
 		rc = fdisk_write_disklabel(sf->cxt);
+		if (rc == 0 && sf->movedata && sf->orig_pa)
+			rc = move_partition_data(sf, sf->partno, sf->orig_pa);
 		if (!rc) {
 			fdisk_info(sf->cxt, _("\nThe partition table has been altered."));
 			fdisk_reread_partition_table(sf->cxt);
@@ -354,6 +531,28 @@ static int command_list_partitions(struct sfdisk *sf, int argc, char **argv)
 		}
 	} else
 		print_all_devices_pt(sf->cxt, sf->verify);
+
+	return 0;
+}
+
+/*
+ * sfdisk --list-free [<device ..]
+ */
+static int command_list_freespace(struct sfdisk *sf, int argc, char **argv)
+{
+	fdisk_enable_listonly(sf->cxt, 1);
+
+	if (argc) {
+		int i, ct = 0;
+
+		for (i = 0; i < argc; i++) {
+			if (ct)
+				fputs("\n\n", stdout);
+			if (print_device_freespace(sf->cxt, argv[i], 0) == 0)
+				ct++;
+		}
+	} else
+		print_all_devices_freespace(sf->cxt);
 
 	return 0;
 }
@@ -620,6 +819,35 @@ static int command_activate(struct sfdisk *sf, int argc, char **argv)
 }
 
 /*
+ * sfdisk --reorder <device>
+ */
+static int command_reorder(struct sfdisk *sf, int argc, char **argv)
+{
+	const char *devname = NULL;
+	int rc;
+
+	if (argc)
+		devname = argv[0];
+	if (!devname)
+		errx(EXIT_FAILURE, _("no disk device specified"));
+
+	rc = fdisk_assign_device(sf->cxt, devname, 0);	/* read-write */
+	if (rc)
+		err(EXIT_FAILURE, _("cannot open %s"), devname);
+
+	if (sf->backup)
+		backup_partition_table(sf, devname);
+
+	if (fdisk_reorder_partitions(sf->cxt) == 1)	/* unchnaged */
+		rc = fdisk_deassign_device(sf->cxt, 1);
+	else
+		rc = write_changes(sf);
+
+	return rc;
+}
+
+
+/*
  * sfdisk --dump <device>
  */
 static int command_dump(struct sfdisk *sf, int argc, char **argv)
@@ -673,7 +901,7 @@ static void assign_device_partition(struct sfdisk *sf,
 
 	lb = fdisk_get_label(sf->cxt, NULL);
 	if (!lb)
-		errx(EXIT_FAILURE, _("%s: not found partition table."), devname);
+		errx(EXIT_FAILURE, _("%s: no partition table found"), devname);
 
 	n = fdisk_get_npartitions(sf->cxt);
 	if (partno > n)
@@ -955,10 +1183,10 @@ static void command_fdisk_help(void)
 	fputs(_("   write    write table to disk and exit\n"), stdout);
 	fputs(_("   quit     show new situation and wait for user's feedback before write\n"), stdout);
 	fputs(_("   abort    exit sfdisk shell\n"), stdout);
-	fputs(_("   print    print partition table.\n"), stdout);
-	fputs(_("   help     this help.\n"), stdout);
+	fputs(_("   print    display the partition table\n"), stdout);
+	fputs(_("   help     show this help text\n"), stdout);
 	fputc('\n', stdout);
-	fputs(_("   CTRL-D   the same like 'quit' command\n"), stdout);
+	fputs(_("   Ctrl-D   the same as 'quit'\n"), stdout);
 
 	fputc('\n', stdout);
 	color_scheme_enable("help-title", UL_COLOR_BOLD);
@@ -967,28 +1195,28 @@ static void command_fdisk_help(void)
 	fputs(_("   <start>, <size>, <type>, <bootable>\n"), stdout);
 
 	fputc('\n', stdout);
-	fputs(_("   <start>  begin of the partition in sectors or bytes if specified\n"
-		"            in format <number>{K,M,G,T,P,E,Z,Y}. The default is\n"
-		"            the first free space.\n"), stdout);
+	fputs(_("   <start>  Beginning of the partition in sectors, or bytes if\n"
+		"            specified in the format <number>{K,M,G,T,P,E,Z,Y}.\n"
+		"            The default is the first free space.\n"), stdout);
 
 	fputc('\n', stdout);
-	fputs(_("   <size>   size of the partition in sectors if specified in format\n"
-		"            <number>{K,M,G,T,P,E,Z,Y} then it's interpreted as size\n"
-		"            in bytes. The default is all available space.\n"), stdout);
+	fputs(_("   <size>   Size of the partition in sectors, or bytes if\n"
+		"            specified in the format <number>{K,M,G,T,P,E,Z,Y}.\n"
+		"            The default is all available space.\n"), stdout);
 
 	fputc('\n', stdout);
-	fputs(_("   <type>   partition type. The default is Linux data partition.\n"), stdout);
+	fputs(_("   <type>   The partition type.  Default is a Linux data partition.\n"), stdout);
 	fputs(_("            MBR: hex or L,S,E,X shortcuts.\n"), stdout);
-	fputs(_("            GPT: uuid or L,S,H shortcuts.\n"), stdout);
+	fputs(_("            GPT: UUID or L,S,H shortcuts.\n"), stdout);
 
 	fputc('\n', stdout);
-	fputs(_("   <bootable>  '*' to mark MBR partition as bootable. \n"), stdout);
+	fputs(_("   <bootable>  Use '*' to mark an MBR partition as bootable.\n"), stdout);
 
 	fputc('\n', stdout);
 	color_scheme_enable("help-title", UL_COLOR_BOLD);
 	fputs(_(" Example:\n"), stdout);
 	color_disable();
-	fputs(_("   , 4G     creates 4GiB partition on default start offset.\n"), stdout);
+	fputs(_("   , 4G     Creates a 4GiB partition at default start offset.\n"), stdout);
 	fputc('\n', stdout);
 }
 
@@ -1141,6 +1369,8 @@ static int ignore_partition(struct fdisk_partition *pa)
 	return 0;
 }
 
+
+
 /*
  * sfdisk <device> [[-N] <partno>]
  *
@@ -1200,6 +1430,9 @@ static int command_fdisk(struct sfdisk *sf, int argc, char **argv)
 					devname, partno + 1);
 		created = 1;
 		next_partno = partno;
+
+		if (sf->movedata)
+			sf->orig_pa = get_partition(sf->cxt, partno);
 	}
 
 	if (sf->append) {
@@ -1411,6 +1644,8 @@ static void __attribute__ ((__noreturn__)) usage(FILE *out)
 	fputs(_(" -J, --json <dev>                  dump partition table in JSON format\n"), out);
 	fputs(_(" -g, --show-geometry [<dev> ...]   list geometry of all or specified devices\n"), out);
 	fputs(_(" -l, --list [<dev> ...]            list partitions of each device\n"), out);
+	fputs(_(" -F, --list-free [<dev> ...]       list unpartitions free areas of each device\n"), out);
+	fputs(_(" -r, --reorder <dev>               fix partitions order (by start offset)\n"), out);
 	fputs(_(" -s, --show-size [<dev> ...]       list sizes of all or specified devices\n"), out);
 	fputs(_(" -T, --list-types                  print the recognized types (see -X)\n"), out);
 	fputs(_(" -V, --verify [<dev> ...]          test whether partitions seem correct\n"), out);
@@ -1430,6 +1665,7 @@ static void __attribute__ ((__noreturn__)) usage(FILE *out)
 	fputs(_(" -a, --append              append partitions to existing partition table\n"), out);
 	fputs(_(" -b, --backup              backup partition table sectors (see -O)\n"), out);
 	fputs(_("     --bytes               print SIZE in bytes rather than in human readable format\n"), out);
+	fputs(_("     --move-data[=<typescript>] move partition data after relocation (requires -N)\n"), out);
 	fputs(_(" -f, --force               disable all consistency checking\n"), out);
 	fputs(_("     --color[=<when>]      colorize output (auto, always or never)\n"), out);
 	fprintf(out,
@@ -1477,7 +1713,8 @@ int main(int argc, char *argv[])
 		OPT_PARTTYPE,
 		OPT_PARTATTRS,
 		OPT_BYTES,
-		OPT_COLOR
+		OPT_COLOR,
+		OPT_MOVEDATA,
 	};
 
 	static const struct option longopts[] = {
@@ -1494,11 +1731,14 @@ int main(int argc, char *argv[])
 		{ "label",   required_argument, NULL, 'X' },
 		{ "label-nested", required_argument, NULL, 'Y' },
 		{ "list",    no_argument,       NULL, 'l' },
+		{ "list-free", no_argument,     NULL, 'F' },
 		{ "list-types", no_argument,	NULL, 'T' },
 		{ "no-act",  no_argument,       NULL, 'n' },
 		{ "no-reread", no_argument,     NULL, OPT_NOREREAD },
+		{ "move-data", optional_argument, NULL, OPT_MOVEDATA },
 		{ "output",  required_argument, NULL, 'o' },
 		{ "partno",  required_argument, NULL, 'N' },
+		{ "reorder", no_argument,       NULL, 'r' },
 		{ "show-size", no_argument,	NULL, 's' },
 		{ "show-geometry", no_argument, NULL, 'g' },
 		{ "quiet",   no_argument,       NULL, 'q' },
@@ -1525,7 +1765,7 @@ int main(int argc, char *argv[])
 	textdomain(PACKAGE);
 	atexit(close_stdout);
 
-	while ((c = getopt_long(argc, argv, "aAbcdfghJlLo:O:nN:qsTu:vVX:Y:",
+	while ((c = getopt_long(argc, argv, "aAbcdfFghJlLo:O:nN:qrsTu:vVX:Y:",
 					longopts, &longidx)) != -1) {
 		switch(c) {
 		case 'A':
@@ -1553,6 +1793,9 @@ int main(int argc, char *argv[])
 			/* fallthrough */
 		case 'd':
 			sf->act = ACT_DUMP;
+			break;
+		case 'F':
+			sf->act = ACT_LIST_FREE;
 			break;
 		case 'f':
 			sf->force = 1;
@@ -1584,6 +1827,9 @@ int main(int argc, char *argv[])
 			break;
 		case 'q':
 			sf->quiet = 1;
+			break;
+		case 'r':
+			sf->act = ACT_REORDER;
 			break;
 		case 's':
 			sf->act = ACT_SHOW_SIZE;
@@ -1633,6 +1879,10 @@ int main(int argc, char *argv[])
 				colormode = colormode_or_err(optarg,
 						_("unsupported color mode"));
 			break;
+		case OPT_MOVEDATA:
+			sf->movedata = 1;
+			sf->move_typescript = optarg;
+			break;
 		default:
 			usage(stderr);
 		}
@@ -1652,6 +1902,9 @@ int main(int argc, char *argv[])
 	else if (!sf->act)
 		sf->act = ACT_FDISK;	/* default */
 
+	if (sf->movedata && !(sf->act == ACT_FDISK && sf->partno >= 0))
+		errx(EXIT_FAILURE, _("--movedata requires -N"));
+
 	switch (sf->act) {
 	case ACT_ACTIVATE:
 		rc = command_activate(sf, argc - optind, argv + optind);
@@ -1663,6 +1916,10 @@ int main(int argc, char *argv[])
 
 	case ACT_LIST_TYPES:
 		rc = command_list_types(sf);
+		break;
+
+	case ACT_LIST_FREE:
+		rc = command_list_freespace(sf, argc - optind, argv + optind);
 		break;
 
 	case ACT_FDISK:
@@ -1701,6 +1958,9 @@ int main(int argc, char *argv[])
 		rc = command_partattrs(sf, argc - optind, argv + optind);
 		break;
 
+	case ACT_REORDER:
+		rc = command_reorder(sf, argc - optind, argv + optind);
+		break;
 	}
 
 	sfdisk_deinit(sf);

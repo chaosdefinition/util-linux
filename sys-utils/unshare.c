@@ -26,10 +26,8 @@
 #include <unistd.h>
 #include <sys/wait.h>
 #include <sys/mount.h>
-
 #include <sys/types.h>
 #include <sys/stat.h>
-#include <unistd.h>
 
 /* we only need some defines missing in sys/mount.h, no libmount linkage */
 #include <libmount.h>
@@ -101,7 +99,7 @@ static void setgroups_control(int action)
 	if (fd < 0) {
 		if (errno == ENOENT)
 			return;
-		 err(EXIT_FAILURE, _("cannot open %s"), file);
+		err(EXIT_FAILURE, _("cannot open %s"), file);
 	}
 
 	if (write_all(fd, cmd, strlen(cmd)))
@@ -247,7 +245,7 @@ static void usage(int status)
 	fputs(_(" -f, --fork                fork before launching <program>\n"), out);
 	fputs(_("     --mount-proc[=<dir>]  mount proc filesystem first (implies --mount)\n"), out);
 	fputs(_(" -r, --map-root-user       map current user to root (implies --user)\n"), out);
-	fputs(_("     --propagation <slave|shared|private|unchanged>\n"
+	fputs(_("     --propagation slave|shared|private|unchanged\n"
 	        "                           modify mount propagation in mount namespace\n"), out);
 	fputs(_(" -s, --setgroups allow|deny  control the setgroups syscall in user namespaces\n"), out);
 

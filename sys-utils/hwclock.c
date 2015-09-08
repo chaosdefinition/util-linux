@@ -137,7 +137,7 @@ int debug;
 bool badyear;
 
 /* User-specified epoch, used when rtc fails to return epoch. */
-unsigned long epoch_option = -1;
+unsigned long epoch_option = ULONG_MAX;
 
 /*
  * Almost all Award BIOS's made between 04/26/94 and 05/31/95 have a nasty
@@ -1260,7 +1260,7 @@ manipulate_clock(const bool show, const bool adjust, const bool noadjfile,
 		 const bool testing, const bool predict, const bool get)
 {
 	/* Contents of the adjtime file, or what they should be. */
-	struct adjtime adjtime;
+	struct adjtime adjtime = { 0 };
 	bool universal;
 	/* Set if user lacks necessary authorization to access the clock */
 	bool no_auth;
@@ -1452,13 +1452,13 @@ manipulate_epoch(const bool getepoch,
 			printf(_("Kernel is assuming an epoch value of %lu\n"),
 			       epoch);
 	} else if (setepoch) {
-		if (epoch_opt == -1)
+		if (epoch_opt == ULONG_MAX)
 			warnx(_
 			      ("To set the epoch value, you must use the 'epoch' "
 			       "option to tell to what value to set it."));
 		else if (testing)
 			printf(_
-			       ("Not setting the epoch to %d - testing only.\n"),
+			       ("Not setting the epoch to %lu - testing only.\n"),
 			       epoch_opt);
 		else if (set_epoch_rtc(epoch_opt))
 			printf(_

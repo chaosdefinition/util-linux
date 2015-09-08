@@ -79,9 +79,14 @@ int inb(int c __attribute__ ((__unused__)))
 #endif				/* __i386__ __x86_64__ */
 
 #elif defined(__alpha__)
+# ifdef HAVE_SYS_IO_H
+#  include <sys/io.h>
+# else
 /* <asm/io.h> fails to compile, probably because of u8 etc */
 extern unsigned int inb(unsigned long port);
 extern void outb(unsigned char b, unsigned long port);
+extern int iopl(int level);
+# endif
 #else
 static void outb(int a __attribute__ ((__unused__)),
 	  int b __attribute__ ((__unused__)))
@@ -152,15 +157,15 @@ static int is_in_cpuinfo(char *fmt, char *str)
 
 	sprintf(format, "%s : %s", fmt, "%255s");
 
-	if ((cpuinfo = fopen("/proc/cpuinfo", "r")) != NULL) {
-		while (!feof(cpuinfo)) {
+	cpuinfo = fopen("/proc/cpuinfo", "r");
+	if (cpuinfo) {
+		do {
 			if (fscanf(cpuinfo, format, field) == 1) {
 				if (strncmp(field, str, strlen(str)) == 0)
 					found = 1;
 				break;
 			}
-			fgets(field, 256, cpuinfo);
-		}
+		} while (fgets(field, 256, cpuinfo));
 		fclose(cpuinfo);
 	}
 	return found;

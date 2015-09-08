@@ -442,7 +442,7 @@ static struct fdisk_parttype *ask_partition_type(struct fdisk_context *cxt)
 void list_partition_types(struct fdisk_context *cxt)
 {
 	size_t ntypes = 0;
-	struct fdisk_label *lb = fdisk_get_label(cxt, NULL);
+	struct fdisk_label *lb;
 
 	assert(cxt);
 	lb = fdisk_get_label(cxt, NULL);
@@ -723,7 +723,7 @@ static void __attribute__ ((__noreturn__)) usage(FILE *out)
 
 	fputs(USAGE_OPTIONS, out);
 	fputs(_(" -b, --sector-size <size>      physical and logical sector size\n"), out);
-	fputs(_(" -B, --protect-boot            don't erase bootbits when creat a new label\n"), out);
+	fputs(_(" -B, --protect-boot            don't erase bootbits when create a new label\n"), out);
 	fputs(_(" -c, --compatibility[=<mode>]  mode is 'dos' or 'nondos' (default)\n"), out);
 	fputs(_(" -L, --color[=<when>]          colorize output (auto, always or never)\n"), out);
 	fprintf(out,
@@ -791,6 +791,7 @@ int main(int argc, char **argv)
 	atexit(close_stdout);
 
 	fdisk_init_debug(0);
+	scols_init_debug(0);
 	fdiskprog_init_debug();
 
 	cxt = fdisk_new_context();
@@ -949,7 +950,7 @@ int main(int argc, char **argv)
 		if (rc == -EACCES) {
 			rc = fdisk_assign_device(cxt, argv[optind], 1);
 			if (rc == 0)
-				fdisk_warnx(cxt, _("Device open in read-only mode."));
+				fdisk_warnx(cxt, _("Device is open in read-only mode."));
 		}
 		if (rc)
 			err(EXIT_FAILURE, _("cannot open %s"), argv[optind]);

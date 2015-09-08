@@ -265,8 +265,8 @@ int mnt_fstype_is_pseudofs(const char *type)
 		"devtmpfs",
 		"dlmfs",
 		"efivarfs",
-		"fusectl",
 		"fuse.gvfs-fuse-daemon",
+		"fusectl",
 		"hugetlbfs",
 		"mqueue",
 		"nfsd",
@@ -550,10 +550,10 @@ static int add_filesystem(char ***filesystems, char *name)
 		*filesystems = x;
 	}
 	name = strdup(name);
-	if (!name)
-		goto err;
 	(*filesystems)[n] = name;
 	(*filesystems)[n + 1] = NULL;
+	if (!name)
+		goto err;
 	return 0;
 err:
 	mnt_free_filesystems(*filesystems);

@@ -9,5 +9,8 @@ terminate_intr
 usage
 err
 errx
+err_oom
 log_err
 sleepexit
+die
+badconv

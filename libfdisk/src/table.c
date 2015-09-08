@@ -140,10 +140,6 @@ int fdisk_table_next_partition(
 {
 	int rc = 1;
 
-	assert(tb);
-	assert(itr);
-	assert(pa);
-
 	if (!tb || !itr || !pa)
 		return -EINVAL;
 	*pa = NULL;
@@ -226,9 +222,6 @@ struct fdisk_partition *fdisk_table_get_partition_by_partno(
  */
 int fdisk_table_add_partition(struct fdisk_table *tb, struct fdisk_partition *pa)
 {
-	assert(tb);
-	assert(pa);
-
 	if (!tb || !pa)
 		return -EINVAL;
 
@@ -288,9 +281,6 @@ static int table_insert_partition(
  */
 int fdisk_table_remove_partition(struct fdisk_table *tb, struct fdisk_partition *pa)
 {
-	assert(tb);
-	assert(pa);
-
 	if (!tb || !pa)
 		return -EINVAL;
 
@@ -670,7 +660,7 @@ int fdisk_table_wrong_order(struct fdisk_table *tb)
  * @tb: table
  *
  * Add partitions from table @tb to the in-memory disk label. See
- * fdisk_add_partition(), fdisk_delete_all_partitions(). The partitons
+ * fdisk_add_partition(), fdisk_delete_all_partitions(). The partitions
  * that does not define start (or does not follow the default start)
  * are ingored.
  *

@@ -94,6 +94,7 @@ struct menu menu_generic = {
 	.entries	= {
 		MENU_BSEP(N_("Generic")),
 		MENU_ENT  ('d', N_("delete a partition")),
+		MENU_ENT  ('F', N_("list free unpartitioned space")),
 		MENU_ENT  ('l', N_("list known partition types")),
 		MENU_ENT  ('n', N_("add a new partition")),
 		MENU_BENT ('p', N_("print the partition table")),
@@ -432,7 +433,6 @@ int process_fdisk_menu(struct fdisk_context **cxt0)
 		return -EINVAL;
 	}
 
-	rc = 0;
 	DBG(MENU, ul_debug("selected: key=%c, entry='%s'",
 				key, ent->title));
 
@@ -535,7 +535,7 @@ static int generic_menu_cb(struct fdisk_context **cxt0,
 		break;
 	case 'w':
 		if (fdisk_is_readonly(cxt)) {
-			fdisk_warnx(cxt, _("Device open in read-only mode."));
+			fdisk_warnx(cxt, _("Device is open in read-only mode."));
 			break;
 		}
 		rc = fdisk_write_disklabel(cxt);
@@ -560,6 +560,9 @@ static int generic_menu_cb(struct fdisk_context **cxt0,
 		break;
 	case 'i':
 		rc = print_partition_info(cxt);
+		break;
+	case 'F':
+		list_freespace(cxt);
 		break;
 	}
 
@@ -627,7 +630,6 @@ static int generic_menu_cb(struct fdisk_context **cxt0,
 
 			fdisk_info(cxt, _("Leaving nested disklabel."));
 			fdisk_unref_context(cxt);
-			cxt = *cxt0;
 		}
 		break;
 	}

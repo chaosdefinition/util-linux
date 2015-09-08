@@ -9,6 +9,7 @@ dist_noinst_HEADERS += \
 	include/c.h \
 	include/closestream.h \
 	include/colors.h \
+	include/color-names.h \
 	include/cpuset.h \
 	include/crc32.h \
 	include/crc64.h \
@@ -42,7 +43,6 @@ dist_noinst_HEADERS += \
 	include/pt-sgi.h \
 	include/pt-sun.h \
 	include/randutils.h \
-	include/readutmp.h \
 	include/rpmatch.h \
 	include/setproctitle.h \
 	include/statfs_magic.h \

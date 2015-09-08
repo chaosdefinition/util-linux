@@ -13,19 +13,10 @@
 
 #include "c.h"
 #include "list.h"
-#include "colors.h"
+#include "color-names.h"
 #include "debug.h"
 
 #include "libsmartcols.h"
-
-/* features */
-#define CONFIG_LIBSMARTCOLS_ASSERT
-
-#ifdef CONFIG_LIBSMARTCOLS_ASSERT
-# include <assert.h>
-#else
-# define assert(x)
-#endif
 
 /*
  * Debug

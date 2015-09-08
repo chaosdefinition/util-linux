@@ -1148,8 +1148,6 @@ struct libmnt_fs *mnt_table_find_devno(struct libmnt_table *tb,
 	struct libmnt_fs *fs = NULL;
 	struct libmnt_iter itr;
 
-	assert(tb);
-
 	if (!tb)
 		return NULL;
 	if (direction != MNT_ITER_FORWARD && direction != MNT_ITER_BACKWARD)
@@ -1220,10 +1218,10 @@ struct libmnt_fs *mnt_table_get_fs_root(struct libmnt_table *tb,
 
 		src = xsrc = mnt_resolve_spec(mnt_fs_get_source(fs), tb->cache);
 		if (src) {
-			struct libmnt_fs *fs = mnt_table_find_mountpoint(tb,
+			struct libmnt_fs *f = mnt_table_find_mountpoint(tb,
 							src, MNT_ITER_BACKWARD);
-			if (fs)
-				mnt = mnt_fs_get_target(fs);
+			if (f)
+				mnt = mnt_fs_get_target(f);
 		}
 
 		if (mnt)

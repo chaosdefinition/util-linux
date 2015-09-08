@@ -123,7 +123,7 @@ static void xfallocate(int fd, int mode, off_t offset, off_t length)
 	 */
 	if (error < 0) {
 		if ((mode & FALLOC_FL_KEEP_SIZE) && errno == EOPNOTSUPP)
-			errx(EXIT_FAILURE, _("keep size mode (-n option) unsupported"));
+			errx(EXIT_FAILURE, _("fallocate failed: keep size mode is unsupported"));
 		err(EXIT_FAILURE, _("fallocate failed"));
 	}
 }
@@ -170,7 +170,7 @@ static int is_nul(void *buf, size_t bufsize)
 	while (*cp++ == 0)
 		continue;
 
-	  return cbuf + bufsize < cp;
+	return cbuf + bufsize < cp;
 }
 
 static void dig_holes(int fd, off_t off, off_t len)

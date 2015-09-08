@@ -63,6 +63,10 @@ static int mnt_context_append_additional_mount(struct libmnt_context *cxt,
 	return 0;
 }
 
+/*
+ * add additional mount(2) syscall requests when necessary to set propagation flags
+ * after regular mount(2).
+ */
 static int init_propagation(struct libmnt_context *cxt)
 {
 	char *name;
@@ -98,6 +102,41 @@ static int init_propagation(struct libmnt_context *cxt)
 
 		cxt->mountflags &= ~ent->id;
 	}
+
+	return 0;
+}
+
+/*
+ * add additional mount(2) syscall request to implement "ro,bind", the first regular
+ * mount(2) is the "bind" operation, the second is "remount,ro,bind" call.
+ *
+ * Note that we don't remove "ro" from the first syscall (kernel silently
+ * ignores this flags for bind operation) -- maybe one day kernel will support
+ * read-only binds in one step and then all will be done by the firts mount(2) and the
+ * second remount will be noop...
+ */
+static int init_robind(struct libmnt_context *cxt)
+{
+	struct libmnt_addmount *ad;
+	int rc;
+
+	assert(cxt);
+	assert(cxt->mountflags & MS_BIND);
+	assert(cxt->mountflags & MS_RDONLY);
+	assert(!(cxt->mountflags & MS_REMOUNT));
+
+	DBG(CXT, ul_debugobj(cxt, "mount: initialize additional ro,bind mount"));
+
+	ad = mnt_new_addmount();
+	if (!ad)
+		return -ENOMEM;
+
+	ad->mountflags = MS_REMOUNT | MS_BIND | MS_RDONLY;
+	if (cxt->mountflags & MS_REC)
+		ad->mountflags |= MS_REC;
+	rc = mnt_context_append_additional_mount(cxt, ad);
+	if (rc)
+		return rc;
 
 	return 0;
 }
@@ -159,11 +198,8 @@ static int fix_optstr(struct libmnt_context *cxt)
 	};
 #endif
 	assert(cxt);
-	assert(cxt->fs);
 	assert((cxt->flags & MNT_FL_MOUNTFLAGS_MERGED));
 
-	if (!cxt)
-		return -EINVAL;
 	if (!cxt->fs || (cxt->flags & MNT_FL_MOUNTOPTS_FIXED))
 		return 0;
 
@@ -214,6 +250,13 @@ static int fix_optstr(struct libmnt_context *cxt)
 	}
 	if (cxt->mountflags & MS_PROPAGATION) {
 		rc = init_propagation(cxt);
+		if (rc)
+			return rc;
+	}
+	if ((cxt->mountflags & MS_BIND)
+	    && (cxt->mountflags & MS_RDONLY)
+	    && !(cxt->mountflags & MS_REMOUNT)) {
+		rc = init_robind(cxt);
 		if (rc)
 			return rc;
 	}
@@ -390,11 +433,8 @@ static int evaluate_permissions(struct libmnt_context *cxt)
 	unsigned long u_flags = 0;
 
 	assert(cxt);
-	assert(cxt->fs);
 	assert((cxt->flags & MNT_FL_MOUNTFLAGS_MERGED));
 
-	if (!cxt)
-		return -EINVAL;
 	if (!cxt->fs)
 		return 0;
 
@@ -737,7 +777,7 @@ static int do_mount(struct libmnt_context *cxt, const char *try_type)
 							-cxt->syscall_status));
 			return -cxt->syscall_status;
 		}
-		DBG(CXT, ul_debugobj(cxt, "mount(2) success"));
+		DBG(CXT, ul_debugobj(cxt, "  success"));
 		cxt->syscall_status = 0;
 
 		/*
@@ -816,7 +856,6 @@ static int do_mount_by_pattern(struct libmnt_context *cxt, const char *pattern)
 	assert(cxt);
 	assert((cxt->flags & MNT_FL_MOUNTFLAGS_MERGED));
 
-
 	/*
 	 * Use the pattern as list of the filesystems
 	 */
@@ -861,17 +900,15 @@ int mnt_context_prepare_mount(struct libmnt_context *cxt)
 {
 	int rc = -EINVAL;
 
-	assert(cxt);
-	assert(cxt->fs);
-	assert(cxt->helper_exec_status == 1);
-	assert(cxt->syscall_status == 1);
-
 	if (!cxt || !cxt->fs || mnt_fs_is_swaparea(cxt->fs))
 		return -EINVAL;
 	if (!mnt_fs_get_source(cxt->fs) && !mnt_fs_get_target(cxt->fs))
 		return -EINVAL;
 	if (cxt->flags & MNT_FL_PREPARED)
 		return 0;
+
+	assert(cxt->helper_exec_status == 1);
+	assert(cxt->syscall_status == 1);
 
 	cxt->action = MNT_ACT_MOUNT;
 

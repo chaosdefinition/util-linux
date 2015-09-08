@@ -264,12 +264,8 @@ int fdisk_script_set_header(struct fdisk_script *dp,
 {
 	struct fdisk_scriptheader *fi;
 
-	assert(dp);
-	assert(name);
-
 	if (!dp || !name)
 		return -EINVAL;
-
 
 	fi = script_get_header(dp, name);
 	if (!fi && !data)
@@ -373,13 +369,11 @@ int fdisk_script_read_context(struct fdisk_script *dp, struct fdisk_context *cxt
 	int rc;
 	char *p = NULL;
 
-	assert(dp);
+	if (!dp || (!cxt && !dp->cxt))
+		return -EINVAL;
 
 	if (!cxt)
 		cxt = dp->cxt;
-
-	if (!dp || !cxt)
-		return -EINVAL;
 
 	DBG(SCRIPT, ul_debugobj(dp, "reading context into script"));
 	fdisk_reset_script(dp);
@@ -1245,7 +1239,7 @@ int fdisk_script_read_line(struct fdisk_script *dp, FILE *f, char *buf, size_t b
 int fdisk_script_read_file(struct fdisk_script *dp, FILE *f)
 {
 	char buf[BUFSIZ];
-	int rc;
+	int rc = 1;
 
 	assert(dp);
 	assert(f);

@@ -762,8 +762,10 @@ static char *get_subsystems(struct blkdev_cxt *cxt)
 		size_t sz;
 
 		/* don't create "block:scsi:scsi", but "block:scsi" */
-		if (len && strcmp(res + last, sub) == 0)
+		if (len && strcmp(res + last, sub) == 0) {
+			free(sub);
 			continue;
+		}
 
 		sz = strlen(sub);
 		res = xrealloc(res, len + sz + 2);
@@ -916,8 +918,7 @@ static void set_scols_data(struct blkdev_cxt *cxt, int col, int id, struct libsc
 			str = xstrdup(cxt->fstype);
 		break;
 	case COL_TARGET:
-		if (!(cxt->nholders + cxt->npartitions))
-			str = get_device_mountpoint(cxt);
+		str = get_device_mountpoint(cxt);
 		break;
 	case COL_LABEL:
 		probe_device(cxt);

@@ -121,12 +121,10 @@ int fdisk_label_get_fields_ids(
 	size_t i, n;
 	int *c;
 
-	assert(cxt);
-
-	if (!lb)
-		lb = cxt->label;
-	if (!lb)
+	if (!cxt || (!lb && !cxt->label))
 		return -EINVAL;
+
+	lb = cxt->label;
 	if (!lb->fields || !lb->nfields)
 		return -ENOSYS;
 	c = calloc(lb->nfields, sizeof(int));
@@ -175,12 +173,10 @@ int fdisk_label_get_fields_ids_all(
 	size_t i, n;
 	int *c;
 
-	assert(cxt);
-
-	if (!lb)
-		lb = cxt->label;
-	if (!lb)
+	if (!cxt || (!lb && !cxt->label))
 		return -EINVAL;
+
+	lb = cxt->label;
 	if (!lb->fields || !lb->nfields)
 		return -ENOSYS;
 	c = calloc(lb->nfields, sizeof(int));
@@ -420,12 +416,13 @@ int fdisk_create_disklabel(struct fdisk_context *cxt, const char *name)
 		return -ENOSYS;
 
 	__fdisk_switch_label(cxt, lb);
+	assert(cxt->label == lb);
 
 	if (haslabel && !cxt->parent)
 		fdisk_reset_device_properties(cxt);
 
 	DBG(CXT, ul_debugobj(cxt, "create a new %s label", lb->name));
-	return cxt->label->op->create(cxt);
+	return lb->op->create(cxt);
 }
 
 /**
@@ -588,7 +585,7 @@ int fdisk_toggle_partition_flag(struct fdisk_context *cxt,
  *
  * Sort partitions according to the partition start sector.
  *
- * Returns: 0 on success, otherwise, a corresponding error.
+ * Returns: 0 on success, 1 reorder unnecessary, otherwise a corresponding error.
  */
 int fdisk_reorder_partitions(struct fdisk_context *cxt)
 {

@@ -26,7 +26,7 @@ PACKAGE_VERSION_RELEASE=0
 
 dnl libblkid version
 LIBBLKID_VERSION="$PACKAGE_VERSION_MAJOR.$PACKAGE_VERSION_MINOR.$PACKAGE_VERSION_RELEASE"
-LIBBLKID_DATE="19-Feb-2015"
+LIBBLKID_DATE="07-Sep-2015"
 LIBBLKID_LT_MAJOR=1
 LIBBLKID_LT_MINOR=1
 LIBBLKID_LT_MICRO=0
@@ -169,6 +169,7 @@ UL_SET_ARCH([MIPS], [mips*])
 UL_SET_ARCH([HPPA], [hppa*])
 
 AC_SYS_LARGEFILE
+AC_HEADER_ASSERT
 
 dnl Don't forget to maintain alternatively allowed versions in autogen.sh!
 AM_GNU_GETTEXT_VERSION([0.18.3])
@@ -428,7 +429,7 @@ AS_CASE([$have_dirfd:$have_ddfd],
 
 AC_MSG_CHECKING([whether program_invocation_short_name is defined])
 AC_COMPILE_IFELSE([AC_LANG_PROGRAM([[
-	#include <argp.h>
+	#include <errno.h>
 ]], [[
 	program_invocation_short_name = "test";
 ]])], [
@@ -1311,8 +1312,14 @@ AS_IF([test "x$build_mkswap" = xyes -a "x$build_libuuid" != xyes], [
   AC_MSG_WARN([uuid library is not found; mkswap(8) will not generate UUIDs])
 ])
 
-UL_BUILD_INIT([cal], [yes])
+
+AC_ARG_ENABLE([cal],
+  AS_HELP_STRING([--disable-cal], [do not build cal]),
+  [], [UL_DEFAULT_ENABLE([cal], [check])]
+)
+UL_BUILD_INIT([cal])
 AM_CONDITIONAL([BUILD_CAL], [test "x$build_cal" = xyes])
+
 
 UL_BUILD_INIT([logger], [yes])
 AM_CONDITIONAL([BUILD_LOGGER], [test "x$build_logger" = xyes])
@@ -1388,6 +1395,11 @@ AM_CONDITIONAL([BUILD_IPCRM], [test "x$build_ipcrm" = xyes])
 UL_BUILD_INIT([ipcs], [yes])
 AM_CONDITIONAL([BUILD_IPCS], [test "x$build_ipcs" = xyes])
 
+UL_BUILD_INIT([lsipc], [check])
+UL_REQUIRES_LINUX([lsipc])
+UL_REQUIRES_BUILD([lsipc], [libsmartcols])
+AM_CONDITIONAL([BUILD_LSIPC], [test "x$build_lsipc" = xyes])
+
 UL_BUILD_INIT([renice], [yes])
 AM_CONDITIONAL([BUILD_RENICE], [test "x$build_renice" = xyes])
 
@@ -1426,7 +1438,8 @@ UL_BUILD_INIT([setarch], [check])
 UL_REQUIRES_LINUX([setarch])
 AM_CONDITIONAL([BUILD_SETARCH], [test "x$build_setarch" = xyes])
 
-UL_BUILD_INIT([script], [yes])
+UL_BUILD_INIT([script], [check])
+UL_REQUIRES_LINUX([script])
 AM_CONDITIONAL([BUILD_SCRIPT], [test "x$build_script" = xyes])
 
 UL_BUILD_INIT([scriptreplay], [yes])

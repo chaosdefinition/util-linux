@@ -695,8 +695,8 @@ int fdisk_partition_next_partno(
 		struct fdisk_context *cxt,
 		size_t *n)
 {
-	assert(cxt);
-	assert(n);
+	if (!cxt || !n)
+		return -EINVAL;
 
 	if (pa && pa->partno_follow_default) {
 		size_t i;
@@ -1171,9 +1171,6 @@ int fdisk_add_partition(struct fdisk_context *cxt,
 {
 	int rc;
 
-	assert(cxt);
-	assert(cxt->label);
-
 	if (!cxt || !cxt->label)
 		return -EINVAL;
 	if (!cxt->label->op->add_part)
@@ -1232,7 +1229,7 @@ int fdisk_delete_partition(struct fdisk_context *cxt, size_t partno)
 int fdisk_delete_all_partitions(struct fdisk_context *cxt)
 {
 	size_t i;
-	int rc;
+	int rc = 0;
 
 	if (!cxt || !cxt->label)
 		return -EINVAL;
